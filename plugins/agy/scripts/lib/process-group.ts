@@ -1,0 +1,236 @@
+import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
+
+// Runs `agy` in its own process group and stops the whole group in stages.
+//
+// Every stop signal goes to the group (agy and the tool commands it started
+// there): SIGINT first, then SIGTERM, then SIGKILL. The result settles only
+// once the group is gone and the output streams are closed, so callers can
+// delete their temporary files safely.
+
+const INTERRUPT_GRACE_MS = 10_000;
+const TERMINATE_GRACE_MS = 5_000;
+// How long after SIGKILL the group still gets to disappear before the
+// runner stops waiting and reports that it could not reap it.
+const REAP_GRACE_MS = 2_000;
+// Bounds the wait for stdout and stderr to close after the group is gone, in
+// case a process that left the group still holds them open.
+const STREAM_CLOSE_GRACE_MS = 2_000;
+const POLL_MS = 50;
+
+export class AgyNotFoundError extends Error {
+  override name = "AgyNotFoundError";
+}
+
+export type KillFunction = (pid: number, signal: NodeJS.Signals | 0) => void;
+
+export type StopTiming = {
+  interruptGraceMs?: number;
+  terminateGraceMs?: number;
+  reapGraceMs?: number;
+  // For tests: replaces process.kill.
+  kill?: KillFunction;
+};
+
+export type GroupOptions = StopTiming & {
+  cwd: string;
+  // The whole environment of the spawned process; process.env when omitted.
+  env?: NodeJS.ProcessEnv;
+  // Runs once, before the first stop signal is sent, whatever started the
+  // stop (a signal to the runner or a call to stop()).
+  beforeStop?: () => void;
+};
+
+export type GroupExit = {
+  exitCode: number | null;
+  exitSignal: NodeJS.Signals | null;
+  // The signal the runner itself received while the group ran.
+  receivedSignal: NodeJS.Signals | null;
+  // Set when the group could not be reaped: the group could not be signaled,
+  // or did not disappear in time after SIGKILL, so agy processes may still
+  // be running. The run is then not a success.
+  reapError: string | null;
+};
+
+export type AgyGroup = {
+  child: ChildProcessWithoutNullStreams;
+  stop: () => void;
+  // True once a stop has started, by stop() or by a signal to the runner.
+  isStopping: () => boolean;
+  exited: Promise<GroupExit>;
+};
+
+function errorCode(error: unknown): string {
+  return error instanceof Error && "code" in error ? String(error.code) : "unknown";
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+export function spawnAgyGroup(args: readonly string[], options: GroupOptions): AgyGroup {
+  const child = spawn("agy", args, {
+    cwd: options.cwd,
+    shell: false,
+    detached: true,
+    stdio: ["pipe", "pipe", "pipe"],
+    ...(options.env === undefined ? {} : { env: options.env }),
+  });
+  const kill: KillFunction = options.kill ?? ((pid, signal) => process.kill(pid, signal));
+  const interruptGraceMs = options.interruptGraceMs ?? INTERRUPT_GRACE_MS;
+  const terminateGraceMs = options.terminateGraceMs ?? TERMINATE_GRACE_MS;
+  const reapGraceMs = options.reapGraceMs ?? REAP_GRACE_MS;
+  const timers: NodeJS.Timeout[] = [];
+  let receivedSignal: NodeJS.Signals | null = null;
+  let stopping = false;
+  let reapError: string | null = null;
+  let giveUp: (() => void) | null = null;
+  let giveUpTimer: NodeJS.Timeout | undefined;
+  // Set once the group is confirmed gone; only the output streams remain.
+  let groupGone = false;
+  // The last EPERM from signaling the group, reported only if the group is
+  // still not confirmed gone when the stop ladder gives up.
+  let pendingError: string | null = null;
+
+  // ESRCH means the group is gone. EPERM is not final by itself: on macOS,
+  // signaling a group whose only members are zombies not yet reaped (agy
+  // before Node reaps it, or a descendant whose parent is in another group)
+  // fails with EPERM until they are reaped. Any other failure means the group
+  // may still be running and is kept as a reap failure.
+  const signalGroup = (signal: NodeJS.Signals | 0): boolean => {
+    if (child.pid === undefined) {
+      return false;
+    }
+    try {
+      kill(-child.pid, signal);
+      return true;
+    } catch (error) {
+      const code = errorCode(error);
+      if (code === "ESRCH") {
+        pendingError = null;
+        return false;
+      }
+      const message = `could not signal process group ${child.pid} (${code})`;
+      if (code === "EPERM") {
+        pendingError = message;
+      } else {
+        reapError ??= message;
+      }
+      return true;
+    }
+  };
+
+  const stop = (): void => {
+    if (stopping) {
+      return;
+    }
+    stopping = true;
+    options.beforeStop?.();
+    signalGroup("SIGINT");
+    timers.push(
+      setTimeout(() => signalGroup("SIGTERM"), interruptGraceMs),
+      setTimeout(() => signalGroup("SIGKILL"), interruptGraceMs + terminateGraceMs),
+    );
+    // The bound does not depend on the child's exit event: once SIGKILL has
+    // had reapGraceMs to work, the stop ladder gives up waiting for the group.
+    giveUpTimer = setTimeout(() => giveUp?.(), interruptGraceMs + terminateGraceMs + reapGraceMs);
+    timers.push(giveUpTimer);
+  };
+
+  const onSignal = (signal: NodeJS.Signals): void => {
+    receivedSignal ??= signal;
+    stop();
+  };
+  process.on("SIGINT", onSignal);
+  process.on("SIGTERM", onSignal);
+
+  const cleanup = (): void => {
+    process.off("SIGINT", onSignal);
+    process.off("SIGTERM", onSignal);
+    for (const timer of timers) {
+      clearTimeout(timer);
+    }
+  };
+
+  let streamsClosed = false;
+  child.on("close", () => {
+    streamsClosed = true;
+  });
+
+  const exited = new Promise<GroupExit>((resolve, reject) => {
+    let settled = false;
+    let exitCode: number | null = null;
+    let exitSignal: NodeJS.Signals | null = null;
+
+    const finish = (): void => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      cleanup();
+      if (!streamsClosed) {
+        child.stdout.destroy();
+        child.stderr.destroy();
+      }
+      if (reapError !== null) {
+        // Do not let a process we failed to reap keep the runner alive.
+        child.stdin.destroy();
+        child.unref();
+      }
+      resolve({ exitCode, exitSignal, receivedSignal, reapError });
+    };
+    giveUp = () => {
+      // A group that is already gone was reaped, even if a process that left
+      // it still holds the output open; the stream wait has its own bound.
+      if (groupGone || !signalGroup(0)) {
+        return;
+      }
+      reapError ??= pendingError ?? `process group ${child.pid ?? "?"} did not exit after SIGKILL`;
+      finish();
+    };
+
+    child.on("error", (error) => {
+      if (settled || child.pid !== undefined) {
+        return;
+      }
+      settled = true;
+      cleanup();
+      reject(
+        error instanceof Error && errorCode(error) === "ENOENT"
+          ? new AgyNotFoundError("agy was not found on PATH.")
+          : error,
+      );
+    });
+    child.on("exit", (code, signal) => {
+      exitCode = code;
+      exitSignal = signal;
+      void (async () => {
+        // Anything left in the group (processes agy started) is stopped
+        // too; giveUp bounds this wait.
+        for (;;) {
+          if (settled) {
+            break;
+          }
+          if (!signalGroup(0)) {
+            groupGone = true;
+            clearTimeout(giveUpTimer);
+            break;
+          }
+          stop();
+          await sleep(POLL_MS);
+        }
+        if (!settled && !streamsClosed) {
+          let streamTimer: NodeJS.Timeout | undefined;
+          await new Promise<void>((resolveClose) => {
+            streamTimer = setTimeout(resolveClose, STREAM_CLOSE_GRACE_MS);
+            child.once("close", () => resolveClose());
+          });
+          clearTimeout(streamTimer);
+        }
+        finish();
+      })();
+    });
+  });
+
+  child.stdin.on("error", () => {});
+  return { child, stop, isStopping: () => stopping, exited };
+}

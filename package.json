@@ -14,7 +14,7 @@
     "fmt:fix": "oxfmt",
     "typecheck": "tsc",
     "test": "node --test tests/*.test.ts",
-    "test:cli-contract": "AGY_CLI_CONTRACT=1 node --test 'tests/cli-contract*.test.ts'"
+    "test:cli-contract": "AGY_CLI_CONTRACT=1 node --test tests/cli-contract.test.ts"
   },
   "devDependencies": {
     "@commitlint/cli": "21.2.4",
