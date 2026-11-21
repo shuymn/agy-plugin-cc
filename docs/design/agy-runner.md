@@ -1,0 +1,264 @@
+# agy runner: a role-free entry point for running Antigravity CLI from Claude Code
+
+Status: proposed. Target: agy-plugin-cc 0.1.0, a new repository modeled on `shuymn/codex-plugin-cc` 3.0.0 (`docs/design/codex-runner.md`, referred to below as "the Codex design").
+
+## Goal
+
+One executable, `agy-run`, that an orchestrating Claude Code session calls from Bash to run one Antigravity CLI (`agy`) turn: read a prompt file, run `agy` in a given directory, continue a conversation, write the final response to a file, and print a short report that includes which working-tree files the run changed.
+
+The plugin provides the mechanism. What the agent is asked to be (reviewer, investigator, implementer), how the request is written, and what the caller does with the answer belong to the caller. This is the Codex design's surface, carried over to a second backend so the caller can use both with the same habits.
+
+## Design principle: detect and report
+
+Unchanged from the Codex design. The caller is an agent that reads every report; the runner makes problems noticeable instead of handling every case. Report rather than repair, best effort, `unknown` is an acceptable answer, and no mechanism exists only for a rare case the caller would notice anyway.
+
+This principle carries more weight here than in the Codex design, because `agy` offers no read-only sandbox to fall back on (see "Facts about agy"). The role is stated in the prompt; the models this plugin targets follow it; the change report shows when one edited the working tree anyway, and the caller repairs it.
+
+## Trust boundary
+
+`agy-run` runs `agy` with the user's full authority: every file the user can read or write, the network, credentials in the home directory, Git remotes, and the MCP servers and plugins configured for `agy`. Only the permission rules the user configured for `agy` itself still apply. The runner does not narrow this.
+
+The change report covers one thing: non-ignored content of the working tree of `--cwd`, as Git stores it. It does not see `.git` contents, ignored files (`.env`, build output), files outside the tree, credential reads, pushes, API calls, or MCP actions. `changes: none` means "the working tree's tracked and untracked content is unchanged", not "the run had no side effects".
+
+So `agy-run` is for repositories and inputs the caller trusts as much as it trusts itself. A prompt that includes untrusted text (a third-party PR, a fetched web page) can steer the agent to act with that authority; the caller decides whether to send such text. This is the same position the Codex design's default `workspace-write` sandbox took for the working tree, extended to the whole account because `agy` has no sandbox the runner can rely on (D3).
+
+## Non-goals
+
+- Roles, prompts, output schemas, skills, slash commands, hooks (Codex design D1, D9).
+- A strict read-only mode (D3).
+- Detecting side effects outside the working tree (see "Trust boundary").
+- Background execution or job management inside the plugin; the caller uses the Bash tool's background mode.
+- Preventing or undoing edits; the change report makes them observable.
+- Guarding two runs on one conversation, or two runs in one working tree, at the same time. The caller keeps both sequential.
+- Sharing code with codex-plugin-cc through a package (D10).
+
+## Facts about agy
+
+Observed with `agy` 1.5.14 (as `agy --version` reports it after the CLI's own update; a fresh home on the same installation reports 1.5.13) on macOS, in throwaway Git repositories, with `gemini-3.8-flash-low`. Each fact the runner depends on is re-checked by the purpose layer before release.
+
+| # | Fact | How observed |
+|---|------|--------------|
+| F1 | `agy -p=<text>` runs one non-interactive turn. `-p -` does not read stdin; it sends the literal `-` as the prompt. `-p` takes the next argument as its value, so `-p --output-format stream-json` takes the flag as the prompt and exits 2 when that leaves a stray argument. | Real runs. |
+| F2 | With `--input-format stream-json --output-format stream-json -p=`, stdin is read as NDJSON. One line `{"event":"user","message":{"content":"<text>"}}` runs one turn; `content` may also be `[{"type":"text","text":"..."}]`. Unknown `event` values are skipped with a warning on stderr; a missing `event` or `message` field, or a raw newline inside a JSON string, fails the run with exit 1 and a `result` with `status: ERROR`. `--input-format stream-json` without `--output-format stream-json` exits 2. | Real runs. |
+| F3 | Output events: `init` (`conversation_id`, `init.cwd`, `init.permission_mode`, tool list), `step_update` (per step: `step_type` `user_input`/`agent_response`/`tool`/`system_message`, `state`, text deltas, tool name, parameters, and error; the observed tool steps carried no output, while Google's headless documentation shows a `tool_info.output` field; the `user_input` step carries no prompt text), and one final `result` (`conversation_id`, `status` `SUCCESS`/`ERROR`, `response`, `error`, `num_turns`, `usage`, `duration_seconds`, and per the changelog `finished_reason` when a turn ended early and `denied_actions` when tool actions were refused). A startup failure (unknown model, bad input) emits a `result` with `status: ERROR` and `finished_reason: error` and no `init`. | Real runs; `agy changelog`. |
+| F4 | Without `--dangerously-skip-permissions`, headless mode auto-denies every tool call that would need a prompt. `write_file` inside the workspace is denied even with `--mode accept-edits` (`permission_mode` stays `request-review`); `--mode auto` was unavailable for the account used; `--mode plan` writes a plan instead of acting. | Real runs. |
+| F5 | In that default mode `run_command` still ran shell commands, including `touch` on a path outside the workspace. A `permissions.deny` rule `command(*)` blocked shell commands, also together with `--dangerously-skip-permissions`; the turn then ended with `status: SUCCESS`, a non-empty response describing the denial, and no `denied_actions` field. `command` and `run_command` as rule names did not match. | Real runs. |
+| F6 | `--sandbox` wraps commands in macOS `sandbox-exec`. With a login shell outside the system paths (a Nix zsh here) every command fails with exit 71; with `SHELL=/bin/zsh` commands ran and could still write under `/tmp`. Without `--sandbox` the agent sometimes ran a command sandboxed on its own. | Real runs. |
+| F7 | A turn that ends after an auto-denied tool exits 0 with `status: SUCCESS` and an empty `response`; stderr says `jetski: no output produced — a tool required the "<perm>" permission ...`. | Real runs. |
+| F8 | `--print-timeout` expiry returned a partial `response` with `status: SUCCESS`, stderr `AGY_ERROR: {"short_error":...,"status":"DEADLINE_EXCEEDED","reason":"print_timeout"}`, and exit 0 in the observed run; the changelog says such runs exit 3 and set `finished_reason: print_timeout`. An unknown model exits 1 with `status: ERROR` and the reason in `result.error`. | Real runs; `agy changelog`. |
+| F9 | `--conversation <id>` resumes with the earlier context. Resumed from another directory, `init.cwd` reported the new directory but `pwd` in the shell tool printed the original one. | Real runs. |
+| F10 | `--conversation <id>` with an id `agy` does not know prints `warning: conversation "<id>" not found` on stderr, starts a new conversation with a different id, and exits 0 with `status: SUCCESS`. `init` (with the new id) is written before `agy` reads stdin. | Real runs, the second with stdin held open until `init` arrived. |
+| F11 | `TMPDIR` from the environment reached the shell tool when `--sandbox` was not given; under `--sandbox` it was the system default. | Real runs. |
+| F12 | A prompt whose first line is `/help ...` is parsed as a slash command (`/help takes no arguments`) unless `--disable-slash-commands` is given; with the flag the text reaches the model unchanged. A `/` on a later line is not parsed. | Real runs. |
+| F13 | No `agy` process remained after a print-mode run exited. The changelog has entries both for leaving "daemon background tasks such as dev servers" running after headless runs and (1.2.9) for terminating headless daemon processes on exit; which holds for this invocation, and whether tool commands stay in `agy`'s process group, is unverified. Conversations live under `~/.gemini/antigravity-cli/` (`conversations/<id>.db`, `brain/<id>/scratch/`). | `ps`, directory listing, `agy changelog`. |
+| F14 | Without a login, spawned detached with three pipes (the runner's spawn mode), `agy` exits 1 within a second with a `result` of `status: ERROR`. With a controlling terminal it instead prints an OAuth URL, waits 60 seconds, and then emits the error result. | Runs with a fresh home. |
+| F15 | `--model` takes ids from `agy models` (for example `gemini-4-neon-medium`); `--effort` takes `low|medium|high|xhigh|max`. A full argv with `--settings '{bad'` passes flag parsing and fails on the settings value with exit 1 before authentication; an unknown flag or a misplaced `-p` exits 2. | `agy --help`, `agy models`, runs. |
+
+Not observed: how `agy` and its child commands react to SIGINT/SIGTERM in print mode, and whether its tool commands stay in its process group; whether a resumed conversation's file tools follow the original directory like its shell tool (F9).
+
+## Decisions
+
+| # | Decision | Reason |
+|---|----------|--------|
+| D1 | Same surface as `codex-run`: one executable `agy-run` in the plugin's `bin/`, options from argv, prompt only from an absolute `--prompt-file`, final response in a per-run `result.md`, a few lines on stdout. | The caller already uses this contract; the Codex design's reasons (stable `PATH` name, one permission rule, short background notifications) hold unchanged. |
+| D2 | The prompt goes to `agy` on stdin as one `stream-json` `user` message, with `--disable-slash-commands`. | F1: `-p` cannot read stdin. argv would expose the prompt in `ps` and hit `ARG_MAX` for large prompts. F12: without the flag, a prompt starting with `/` is rewritten or rejected, which breaks "the prompt is the file". |
+| D3 | Every run passes `--dangerously-skip-permissions`. There is no `--read-only` option and no `--sandbox`. | F4/F7: without it, headless runs silently fail most tool calls. F5/F6: no flag combination gives a read-only mode that still lets reviewers run read-only probes, and `--sandbox` breaks every command on some login shells. Decision: the role lives in the prompt, the targeted models follow it, and the change report (D4) shows a working-tree edit to the caller, who repairs it. What this does not cover is stated under "Trust boundary". |
+| D4 | Every run takes the baseline and final snapshots and reports `changes:`. | D3 makes every run write-capable; this is the Codex design's D3 applied to all runs. |
+| D5 | The runner writes `result.md` from `result.response` byte for byte (UTF-8, no added newline). A run is `ok` only when all hold: `agy` exited 0; exactly one `init` and exactly one `result` event arrived, both with the same valid `conversation_id`, the `result` after the prompt was written; on a resume that id equals `--thread`; `result.status` is `SUCCESS`; `finished_reason` is absent or empty; `response` is non-empty; no `AGY_ERROR:` line appeared anywhere on stderr; and `result.md` was written. Otherwise exit 1 with a one-line reason. A tool denial with a non-empty response stays `ok`. | `agy` has no `-o`. F7/F8/F10: exit 0 and `SUCCESS` do not mean a completed turn of the requested conversation. A denial the agent explains in its response (F5) is a usable answer the caller reads; failing it would discard the answer. |
+| D6 | No `--print-timeout`. | F8: its expiry has looked like success, and its exit code differs between the observed run and the changelog. The caller stops a run by stopping the background task. |
+| D7 | `--thread <id>` maps to `--conversation <id>`. It is accepted only when the canonical `--cwd` (the spawn directory, not the workspace root) and the Git common directory both equal the values recorded when the conversation started. | F9: a resumed conversation keeps working in its original directory, so a resume from another worktree, or another subdirectory of the same worktree, would work in a place `cwd:` and the change report do not name. The Codex design's "any worktree of the same repository" rule cannot be met. |
+| D8 | The runner owns a scratch directory per run, passes it as `TMPDIR`, deletes it afterwards, and reports `scratch left:` when it could not. No `--add-dir`. | Codex design D8. F11: `TMPDIR` reaches the shell tool without `--sandbox`. `--add-dir` existed in `codex-run` only to make the scratch directory writable under `workspace-write`; under D3 writes outside the workspace are already allowed (F5 shows an outside write even without D3's flag), and `--add-dir` adds a directory to `agy`'s workspace, which changes what the agent searches. `agy`'s own `brain/<id>/scratch/` is per conversation and never deleted by `agy`, so it is not a replacement. |
+| D9 | Thread records, run directories, and the run log live under `$XDG_STATE_HOME/agy-plugin-cc`, or `~/.local/state/agy-plugin-cc` when `XDG_STATE_HOME` is unset, empty, or relative. | Same layout and fallback as the Codex design, separate namespace. |
+| D10 | Code is copied from codex-plugin-cc 3.0.0, not shared through a package. | Two small single-user repositories. A shared package adds versioning and publishing for about 700 lines that change rarely. Revisit if a fix has to be made in both twice. |
+| D11 | Each run prints a run id and appends one metadata line to the run log (no prompt, result, or paths). | Codex design D11. Joined by run id with the caller's notes on whether the request allowed edits, it measures how often D3 leads to unrequested edits. |
+| D12 | The prompt is written to stdin only after the first `init` arrived and was accepted, and only while the run is not stopping; the wait for `init` is bounded at 120 seconds. | F10: on a stale resume `agy` starts a replacement conversation; sending the prompt first would let a follow-up such as "apply the agreed edit" run there without the earlier context. `init` preceded the stdin read in the observed stale resume; the bound turns a mode or version that waits for stdin first into a failure the caller sees instead of a hang. |
+
+## Purpose layer
+
+Each item names its source; the check runs on the real Claude Code and `agy`.
+
+- **P1.** When the caller runs `agy-run --prompt-file <absolute file> --cwd <dir>` from the Bash tool, the system shall run one `agy` turn in `<dir>` with the file's text as the prompt, and the command line shall keep working after a plugin update.
+  - Source: D1 (the Codex design's P1).
+  - Check: in a new Claude Code session, `command -v agy-run` resolves into the plugin; run it in the foreground and in the background; update the plugin and repeat in the running session and in a new one.
+- **P2.** When a run finishes, stdout shall hold at most 8 lines plus a change listing of at most 11 lines, naming the run id, the conversation id, the status, the result file, and the change report; the result file shall equal the turn's final response.
+  - Source: D1, D5.
+  - Check: compare `result.md` with `result.response` in the same run's `events.jsonl`, with a prompt whose final answer differs from its last progress message.
+- **P3.** When the caller passes `--thread <id>` for a conversation `agy-run` started in the same directory, the system shall continue it; for an unknown id, another directory, or another repository it shall exit 2 before starting `agy` and name the recorded directory when there is one; when `agy` itself does not resume that conversation, the run shall exit 1 and keep the record.
+  - Source: D7, F9, F10.
+  - Check: round 1 asks to remember a token; round 2 in the same directory returns it; round 3 from a sibling subdirectory and from another worktree is refused; after deleting the conversation in `agy`, a resume exits 1 with a stale-conversation reason.
+- **P4.** When a run changes, adds, or deletes non-ignored files in the working tree of `--cwd`, the system shall list them (the full list in `changes.txt` above ten) with the baseline tree id; equal snapshots report `none`; an undetermined result reports `unknown: <reason>`.
+  - Source: D4.
+  - Check: one run that edits and adds files, one that edits and restores, one that changes nothing, one that adds eleven files.
+- **P5.** When a run ends, the system shall delete the scratch directory it gave `agy`, or print `scratch left: <dir>`; the shell tool shall see that directory as `TMPDIR`.
+  - Source: D8.
+  - Check: a new and a resumed run, each with a prompt that prints `$TMPDIR`, writes a file there, and does not clean up; the printed directory equals `scratch:` of that run and is gone afterwards.
+- **P6.** The system shall not add text to the prompt, constrain the output, or reformat the result.
+  - Source: D2, D5.
+  - Check: prompts starting with `/`, starting with `-`, starting with a UTF-8 BOM, and containing quotes, backslashes, and non-ASCII text; ask the agent to repeat the prompt verbatim in a fenced block and compare it with the file (the stream carries no prompt text, F3), and compare `result.md` with `result.response` in `events.jsonl`.
+- **P7.** If the turn ends without a response, ends early, reports an `AGY_ERROR`, or `agy` fails, the system shall exit 1 with a one-line reason that names the cause, even when `agy` exits 0.
+  - Source: D5, F7, F8, F14.
+  - Check: an unknown model (startup error, reason from `result.error`); a run with `HOME` pointing to an empty directory, spawned as the runner spawns (F14, reason names the authentication error); a run with a deny rule `command(*)` in `agy`'s settings and a prompt that needs a command, expected `ok`, a `tool` step with a permission error in `events.jsonl`, and the denial explained in `result.md`.
+- **P8.** While runs execute concurrently in different worktrees, each run's report, result, and conversation shall cover only its own worktree and output.
+  - Source: the Codex design's P8.
+  - Check: two background runs in two worktrees of one repository, one editing and one not, report `<files>` and `none`, distinct results and conversation ids.
+- **P9.** If `agy` is not on `PATH`, the system shall exit 3 without a `run:` line.
+  - Source: the Codex design's P9.
+  - Check: run with a `PATH` lacking `agy`.
+- **P10.** When the caller stops a background run while `agy`'s process group is live, the system shall stop `agy`'s process group and exit 128+n, printing the conversation id if one was reported; if the group cannot be confirmed gone, it shall exit 1 and leave the scratch directory, printing `scratch left:`. A signal after the group helper has removed its handlers (during the final snapshot, result write, or cleanup) ends the runner with the default action, so output without a `status:` or `changes:` line is incomplete and the scratch directory may remain.
+  - Source: the Codex design's P10 and its signal-handler lifetime in `process-group.ts`.
+  - Check: a long run with a running shell command, stopped from Claude Code; afterwards no `agy` or child process remains, and a follow-up `--thread` round shows the earlier context.
+
+## The new surface
+
+### Entry point
+
+`plugins/agy/bin/agy-run`: the same POSIX wrapper as `bin/codex-run`, `exec node <plugin root>/scripts/agy-run.ts "$@"`. The `bin/` checks the Codex design listed (P1) are repeated once for this plugin.
+
+### Options
+
+```
+agy-run --prompt-file <absolute file> [--cwd <dir>] [--thread <id>]
+        [--model <model>] [--effort <effort>]
+agy-run --help
+```
+
+- `--prompt-file`: as in `codex-run`. The bytes are decoded with `new TextDecoder("utf-8", { fatal: true, ignoreBOM: true })`, so a leading BOM is kept in the prompt; a decoding error is a usage error (exit 2), since D2 encodes the prompt as a JSON string.
+- `--cwd`: `agy`'s working directory (the spawn's `cwd`). Default: the current directory.
+- `--thread <id>`: D7. Ids are validated against `^[A-Za-z0-9-]{1,128}$`.
+- `--model`, `--effort`: passed through unchanged. Without them `agy`'s settings decide.
+
+Parsing as in `codex-run` (`parseArgs`, strict, exit 2 on errors, long options only, `--help` exits 0 without starting `agy`).
+
+`agy` argv:
+
+```
+agy --input-format stream-json --output-format stream-json --disable-slash-commands
+    --dangerously-skip-permissions
+    [--conversation <id>] [--model <model>] [--effort <effort>] -p=
+```
+
+`-p=` comes last and with `=` (F1). After the first `init` is accepted and while the run is not stopping (D12), stdin receives one line, `JSON.stringify({event: "user", message: {content: <prompt>}})` plus `\n`, and is closed. Every path that stops `agy` (a refused `init`, a record write failure, the 120-second `init` wait, SIGINT/SIGTERM) first marks the run as stopping and closes stdin unwritten. If `agy` exits before any `init`, stdin is closed unwritten. `JSON.stringify` escapes newlines, so the line is one NDJSON record (F2).
+
+### Run lifecycle
+
+1. Usage errors and refused `--thread` exit 2; `agy` missing from `PATH` exits 3; a failed Git lookup of `--cwd` exits 1. None of these prints `run:` or creates state.
+2. Prune run directories older than 7 days, create the run directory, print `run: <id>`.
+3. Take the baseline snapshot, create the scratch directory, print `scratch: <path>`.
+4. Start `agy` in its own process group with the sanitized environment (the runner's environment without `GIT_DIR`, `GIT_WORK_TREE`, `GIT_INDEX_FILE`, `GIT_COMMON_DIR`, `GIT_OBJECT_DIRECTORY`, `GIT_ALTERNATE_OBJECT_DIRECTORIES`) plus `TMPDIR`. Hold stdin open. If no `init` arrives within 120 seconds and `agy` is still running, stop it (`no init event within 120s`, exit 1). On the first `init`: an id that fails the thread-id pattern stops `agy` (exit 1); on a resume, an id that differs from `--thread` stops `agy` before the prompt is sent (stale conversation, exit 1, record kept); otherwise print `thread: <id>`, write the thread record (on a new run) or touch its `updatedAt` (on a resume), and write the prompt (D12). A record write failure stops `agy` (exit 1). A second `init` is counted and fails the run under D5; it is not printed or recorded.
+5. Wait for the process group to be gone; on SIGINT/SIGTERM stop it in stages (SIGINT, SIGTERM, SIGKILL).
+6. Take the final snapshot and report changes. After an interruption the report is `unknown: interrupted`, after a reap failure `unknown: reap-error`, each with the baseline id.
+7. If the run was not interrupted and the group was reaped, apply D5 and, when it holds so far, write `result.md`; a write failure makes the run exit 1 without `result:`. A signal exit code is never replaced by a write failure. Delete the scratch directory unless the process group could not be confirmed gone. Append the run log line, print the remaining lines, exit.
+
+A signal before `agy` starts, or a hard kill of the runner, skips the cleanup. If `agy` leaves a daemon background task running or starts tool commands outside its process group (F13, unverified), they survive the run; the caller sees them only if the agent mentions them.
+
+### Event handling
+
+- stdout is read line by line; lines that are not JSON objects are ignored. Lines of any length are accepted.
+- Each raw stdout chunk is also appended to `<run dir>/events.jsonl` with `fs.appendFileSync`, so the file equals `agy`'s stdout byte for byte (line endings included). The archive is best effort: on the first write error the runner stops archiving, prints `agy-run: events not saved: <error>` on stderr, and continues; the run's status does not depend on it. `events.jsonl` is the only record of which tools ran (F3), so a caller that sees an unexpected `changes:` can look there; it is pruned with the run directory after 7 days and may contain tool parameters and outputs.
+- `init` and `result` events are counted. The first `init` drives step 4; D5 needs both counts to be exactly one.
+- stderr is scanned line by line as it arrives, independent of the bounded tail kept for display: the first `AGY_ERROR:` line and the first `jetski: no output produced` line are latched.
+
+### Output contract
+
+```
+run: <id>
+scratch: <path>
+thread: <conversation id>
+status: ok | failed | interrupted (exit <n>)
+result: <run dir>/result.md
+cwd: <path>
+changes: none | <n> files (baseline <tree>, paths relative to <root>) | unknown: <reason> (baseline <tree>)
+  <status> <path>              up to 10 lines
+  ... full list: <run dir>/changes.txt
+scratch left: <path>
+```
+
+Same escaping and ordering rules as `codex-run`. `thread:` appears only when an accepted `init` arrived; `result:` only on exit 0. The `sandbox:` field is dropped because there is one mode; `cwd:` keeps its line. Output without a `status:` line or a `changes:` line is incomplete.
+
+stderr on failure: `agy-run: <one-line reason>`, then up to 40 cleaned lines of `agy`'s stderr. The reason is the first that applies:
+
+1. `process group not confirmed gone: <error>`
+2. `invalid conversation id from agy: <id>`; `thread record not written: <error>`
+3. `stale conversation: requested <id>, agy started <id>`
+4. `result.error`
+5. the `AGY_ERROR:` line's `short_error`, else its `reason`, else the raw line
+6. `finished_reason: <value>`
+7. `status: <value>` (a `result` whose status is not `SUCCESS`, without an error)
+8. `no init event within 120s`; when neither `init` nor `result` arrived, `agy exited <n>` followed by `: <last stderr line>` when stderr is not empty; `no init event`; `multiple init events`; `multiple result events`; `result conversation <id> differs from init <id>`; `result before prompt`
+9. the `jetski:` line
+10. `empty response`
+11. `no result event (agy exited <n>)`, followed by `: <last stderr line>` when stderr is not empty
+12. `agy exited <n>`
+13. `result.md not written: <error>`
+
+### Exit codes
+
+| Code | Meaning |
+|------|---------|
+| 0 | D5 holds. |
+| 1 | D5 does not hold, a Git lookup failed before starting, the thread record could not be written, or the process group could not be confirmed gone (this takes precedence over a signal). |
+| 2 | Usage error or refused `--thread`. `agy` was not started. |
+| 3 | `agy` not found on `PATH`. |
+| 128+n | Stopped by signal n after `agy` started. |
+
+The change report never changes the exit code.
+
+### Thread store
+
+`<state>/threads/<conversation id>.json` holds `{cwd, root, repo, updatedAt}`: `cwd` the canonical spawn directory, `root` the canonical workspace root (shown in refusals; the change report resolves its own root on each run), `repo` the real path of the Git common directory or null outside Git. `--thread <id>` is accepted when the record exists and both `cwd` and `repo` equal the current values (null equals null). A refusal names the recorded `cwd`; an unknown id says so and suggests `agy --conversation <id>` in a terminal.
+
+### Scratch directory and change detection
+
+Reused from codex-plugin-cc (`scratch.ts`, `snapshot.ts`, `changes.ts`, `git.ts`), with one fix to `snapshot.ts`: its Git calls add `-c core.splitIndex=false`. Without it, in a repository with `core.splitIndex=true`, `git add` into the temporary index writes a new `sharedindex.*` file into the user's `.git` (reproduced with Git 2.54.0 and the 3.0.0 call sequence); with it, `.git` is unchanged and the report is the same. The same fix goes to codex-plugin-cc.
+
+The temporary index stays seeded from `HEAD`. Seeding it from a copy of the user's index was considered to cover tracked files that match an ignore rule and are absent from `HEAD` (added with `git add -f`), which `git add -A` skips; the copy was shown to instead carries `assume-unchanged` and `skip-worktree` bits and stale stat data that hide ordinary edits, and that it fails on a missing index. The rare case is accepted as a limit instead.
+
+The limits listed in the Codex design apply: Git 2.45 or later, submodules and filter attributes give `unknown`, changes by others in the same tree are attributed to the run, ignored files and `.git` are not covered, and snapshot trees are unreferenced objects that `git gc` prunes. In addition: edits to a force-added file that matches an ignore rule and is not in `HEAD` report `none`, and sparse checkouts are untested (edits outside the sparse patterns may be missed or make the snapshot fail as `unknown`).
+
+The snapshot's temporary index and the scratch directory are created under the system temporary directory, and thread records under the state directory. If the caller's `TMPDIR` or `XDG_STATE_HOME` points inside the measured working tree, the runner's own files appear in `changes:`; the README tells callers to keep both outside the repository.
+
+### Run log
+
+As in `codex-run`, without `sandbox`. Fields: `run`, `time`, `continued`, `exit`, `durationMs`, `changes`, `unknown`, `snapshotMs`.
+
+## Plan layer
+
+Tests use a fake `agy` (`tests/fixtures/fake-agy.ts`) that records argv, stdin, and environment, and emits scripted stdout lines, stderr lines, and an exit code. Each claim's test fails with the behavior removed.
+
+- **H1.** The wrapper execs `scripts/agy-run.ts` of its own version through a symlink. Source: P1. Test: `entry.test.ts` (copied).
+- **H2.** Missing, relative, unreadable, blank, or non-UTF-8 prompt files, a bad `--cwd`, unknown options, and positional arguments exit 2; `--help` exits 0; none of them starts the fake or creates a run directory. Source: P1, D2. Test: `runner.test.ts`.
+- **H3.** stdin is exactly one line, parsing to `{event: "user", message: {content}}` with `content` equal to the file's text, in separate cases for a file starting with `/`, one starting with `-`, one starting with a BOM, one with quotes, backslashes, newlines, and non-ASCII, and one of 2 MiB. Source: P6, D2. Test: fake records stdin.
+- **H4.** argv equals the expected list exactly for a new run and for a resume with `--model` and `--effort`, and has no `--conversation`, `--model`, `--effort` when not given. A contract test runs the real `agy` with the generated argv plus `--settings '{bad'` and expects the settings error (exit 1) rather than a flag error (exit 2). Source: D2, D3, D6, D8, F15. Test: `runner.test.ts`, `cli-contract.test.ts`.
+- **H5.** stdout starts with `run:`, has `scratch:` before the fake starts, has `thread:` only after an accepted `init` (absent when the fake fails before `init`), keeps a path containing a newline on one escaped line, lists 10 of 100 changed files with the overflow file holding all 100 and the baseline, and its run id matches the run log line. Source: P2, P4, D11. Test: `runner.test.ts`.
+- **H6.** `result.md` equals `result.response` byte for byte when the last progress delta differs from it. Exit 1 without `result:`, with the expected reason asserted, in one case each, every case with exit 0 and otherwise valid events: `status: ERROR`; empty `response`; `finished_reason: print_timeout`; an `AGY_ERROR:` line followed by 100 noise lines on stderr; no `result` (reason includes the last stderr line); no `init` (with a `SUCCESS` result); a `SUCCESS` result written before `init`; no `init` within the wait (a shortened bound injected by the test), with zero stdin bytes received; two `init` events with different ids; two `result` events; `result` id differing from `init` id; a `result.md` write failure (a directory created at `result.md` before the run), which still prints `status:` and `changes:` and removes the scratch directory. A non-empty `SUCCESS` response with `denied_actions` exits 0. `events.jsonl` equals the fake's stdout byte for byte; when a directory exists at the `events.jsonl` path, the run still completes with exit 0 and prints the `events not saved` warning. Source: P2, P7, D5. Test: `runner.test.ts`.
+- **H7.** A resume from the recorded directory starts the fake with `--conversation`; from a sibling subdirectory, another worktree, another repository, a directory that was not in Git when recorded and is now, and an invalid or unknown id, exits 2 without starting it, naming the recorded directory where one exists. A resume whose `init` carries another id exits 1, stops the fake before it receives any stdin, and leaves the record unchanged. On a new run the fake receives the prompt only after it wrote `init`. Source: P3, D7, F10. Test: `thread-store.test.ts`, `runner.test.ts`.
+- **H8.** Change report cases as in `codex-run` (A/M/D, modify-and-restore gives `none`, outside Git gives `unknown`), plus a repository with `core.splitIndex=true` and `splitIndex.maxPercentChange=0` whose `.git` listing and `sharedindex.*` mtimes are unchanged after both snapshots. Source: P4. Test: `changes.test.ts` (copied and extended).
+- **H9.** The change report never changes the exit code: a run with changes exits 0, a failed run with changes exits 1, an interrupted run exits 128+n with `unknown: interrupted`, a reap failure exits 1 even after a signal. Source: P10, D4. Test: `runner.test.ts`.
+- **H10.** With `agy` absent from `PATH` the run exits 3 with no `run:` line and no run directory. Source: P9. Test: `runner.test.ts`.
+- **H11.** The fake sees the run's scratch directory as `TMPDIR` and none of the six repository-selection Git variables, although the test sets all of them to another repository; the snapshot and workspace root come from `--cwd` (a linked worktree). The scratch directory is gone afterwards; when its removal fails, `scratch left:` is printed. Source: P5, D8. Test: `runner.test.ts`.
+- **H12.** On SIGINT and SIGTERM the fake and a child it spawned are gone, the run exits 130 or 143 and names the conversation; when the injected `kill` fails (as in the reference reap test), the run exits 1 and prints `scratch left:`; when the fake writes `init` after the runner received SIGINT, the fake receives zero stdin bytes. Source: P10. Test: `process-group.test.ts` and `runner.test.ts` (adapted).
+
+## Reused and new code
+
+Copied from codex-plugin-cc 3.0.0 without behavior changes: `git.ts` (120), `changes.ts` (96), `escape.ts`, `json.ts`, `bin/` wrapper, CI and tooling config.
+
+Copied with edits: `snapshot.ts` (`core.splitIndex=false`, above), `process-group.ts` (spawns `agy` instead of `codex`, names in errors), `env.ts` (`agy-plugin-cc` state directory), `runs.ts` (run log without `sandbox`), `scratch.ts` (prefix `agy-run-scratch-`), `thread-store.ts` (record fields and match rule, D7).
+
+Rewritten: `codex-run.ts` → `agy-run.ts` (no read-only branch, stdin envelope, D5, lifecycle step 4 and 7); `codex-exec.ts` → `agy-exec.ts` (event handling and stderr latching above, failure reason); `fake-codex.ts` → `fake-agy.ts`.
+
+## Required changes on the caller side
+
+1. Requests to `agy-run` state the role and, where the agent must not edit, say so; there is no `--read-only` to rely on.
+2. After each run, read `status:` and `changes:`, and read `result.md` on `ok`; the response may report that a tool was denied or a step failed. On a round whose request forbade edits, a non-empty report is a finding to inspect and repair before anything else touches the tree. `unknown` is not `none`.
+3. Note each run id with whether the request allowed edits (D11).
+4. Continue a conversation only from the directory it started in; for another directory, start a new conversation and pass the earlier result in the prompt.
+5. Keep `TMPDIR` and `XDG_STATE_HOME` outside the repositories `agy-run` works in, and run at most one `agy-run` per working tree at a time.
+6. Do not put untrusted text into a request unless the caller accepts that the agent may act on it with the user's authority ("Trust boundary").
+7. Permission rule: `Bash(agy-run:*)`.
+
+## Open questions
+
+- Whether SIGINT/SIGTERM to `agy` in print mode stops its tool commands, whether those commands stay in its process group, and whether the conversation stays resumable after a staged stop (P10).
+- Whether `init` precedes the stdin read for new runs and valid resumes, as it did for the stale resume (F10); D12's bound turns a counterexample into `no init event within 120s`.
+- Whether a resumed conversation's file tools follow the original directory like its shell tool (F9). D7 is safe either way.
+- The exit code of a print-timeout run (F8). D6 avoids the flag, and D5 does not depend on the exit code for it.
