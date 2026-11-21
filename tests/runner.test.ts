@@ -418,6 +418,23 @@ test("a turn that is not a usable answer exits 1 without result:, with the reaso
   }
 });
 
+test("an agy on PATH that cannot be started exits 1 with the normal report", () => {
+  const fake = makeFakeEnv({ agy: false });
+  const repo = makeRepo(fake.env);
+  const bin = makeTempDir();
+  // execve fails: the interpreter does not exist.
+  fs.writeFileSync(path.join(bin, "agy"), "#!/nonexistent/interpreter\n", { mode: 0o755 });
+  const result = run(fake, ["--prompt-file", writePrompt()], repo, {
+    PATH: `${bin}${path.delimiter}${fake.env.PATH ?? ""}`,
+  });
+  assert.equal(result.status, 1, result.stderr);
+  assert.match(firstLine(result.stderr), /^agy-run: agy could not start: .*ENOENT/);
+  assert.match(outputLine(result.stdout, "run") ?? "", /^\d{8}T/);
+  assert.equal(outputLine(result.stdout, "status"), "failed (exit 1)");
+  assert.equal(outputLine(result.stdout, "changes"), "none");
+  assert.deepEqual(fs.readdirSync(fake.tmp), []);
+});
+
 test("a non-empty response with denied actions is ok", () => {
   const { fake, repo } = setup(["init", "read", { result: { denied_actions: ["write_file"] } }]);
   const result = run(fake, ["--prompt-file", writePrompt()], repo, { FAKE_AGY_RESPONSE: "The write was denied." });

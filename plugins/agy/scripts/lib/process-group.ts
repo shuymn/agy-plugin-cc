@@ -17,8 +17,10 @@ const REAP_GRACE_MS = 2_000;
 const STREAM_CLOSE_GRACE_MS = 2_000;
 const POLL_MS = 50;
 
-export class AgyNotFoundError extends Error {
-  override name = "AgyNotFoundError";
+// agy could not be started at all, such as an executable whose interpreter
+// is missing. The PATH lookup before the run reports a missing agy.
+export class AgyStartError extends Error {
+  override name = "AgyStartError";
 }
 
 export type KillFunction = (pid: number, signal: NodeJS.Signals | 0) => void;
@@ -194,11 +196,7 @@ export function spawnAgyGroup(args: readonly string[], options: GroupOptions): A
       }
       settled = true;
       cleanup();
-      reject(
-        error instanceof Error && errorCode(error) === "ENOENT"
-          ? new AgyNotFoundError("agy was not found on PATH.")
-          : error,
-      );
+      reject(new AgyStartError(`agy could not start: ${error instanceof Error ? error.message : String(error)}`));
     });
     child.on("exit", (code, signal) => {
       exitCode = code;

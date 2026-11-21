@@ -5,15 +5,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { parseArgs } from "node:util";
 
-import {
-  AgyNotFoundError,
-  agyArgs,
-  type AgyRunResult,
-  cleanAgyStderr,
-  runAgy,
-  signalExitCode,
-  turnFailure,
-} from "./lib/agy-exec.ts";
+import { agyArgs, type AgyRunResult, cleanAgyStderr, runAgy, signalExitCode, turnFailure } from "./lib/agy-exec.ts";
 import { type ChangeReport, compareTrees, formatChanges, snapshotProblem } from "./lib/changes.ts";
 import { escapeLine } from "./lib/escape.ts";
 import { canonicalWorkspaceRoot, GitError, gitCommonDir, gitEnv, resolveWorkspaceRoot } from "./lib/git.ts";
@@ -299,10 +291,8 @@ export async function main(argv: string[], io: RunnerIo): Promise<number> {
     });
     outcome = outcomeOf(result, request.thread);
   } catch (error) {
-    outcome =
-      error instanceof AgyNotFoundError
-        ? { exit: EXIT_AGY_NOT_FOUND, summary: error.message, detail: "" }
-        : { exit: EXIT_FAILED, summary: error instanceof Error ? error.message : String(error), detail: "" };
+    // Includes AgyStartError: after the run started, a spawn failure is exit 1.
+    outcome = { exit: EXIT_FAILED, summary: error instanceof Error ? error.message : String(error), detail: "" };
   }
 
   const reapError = result?.reapError ?? null;

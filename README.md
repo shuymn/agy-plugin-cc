@@ -155,13 +155,13 @@ After `agy`'s process group exits, `agy-run` deletes the directory after verifyi
 
 ### Exit codes
 
-| Code    | Meaning                                                                                                                                                                                                              |
-| ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `0`     | The turn completed with a non-empty response, written to `result.md`.                                                                                                                                                |
-| `1`     | `agy` failed or ended without a usable response, a Git lookup failed before starting, the thread record could not be written, or `agy`'s process group could not be confirmed gone (takes precedence over a signal). |
-| `2`     | Usage error (missing, relative, unreadable, blank, or non-UTF-8 `--prompt-file`; invalid `--cwd`; unknown option; positional argument) or refused `--thread`. `agy` was not started.                                 |
-| `3`     | `agy` was not found on `PATH`.                                                                                                                                                                                       |
-| `128+n` | Stopped by signal `n` (`130` for `SIGINT`, `143` for `SIGTERM`) after `agy` started.                                                                                                                                 |
+| Code    | Meaning                                                                                                                                                                                                                                     |
+| ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `0`     | The turn completed with a non-empty response, written to `result.md`.                                                                                                                                                                       |
+| `1`     | `agy` failed, could not be started, or ended without a usable response, a Git lookup failed before starting, the thread record could not be written, or `agy`'s process group could not be confirmed gone (takes precedence over a signal). |
+| `2`     | Usage error (missing, relative, unreadable, blank, or non-UTF-8 `--prompt-file`; invalid `--cwd`; unknown option; positional argument) or refused `--thread`. `agy` was not started.                                                        |
+| `3`     | `agy` was not found on `PATH`.                                                                                                                                                                                                              |
+| `128+n` | Stopped by signal `n` (`130` for `SIGINT`, `143` for `SIGTERM`) after `agy` started.                                                                                                                                                        |
 
 ### Running in the background
 

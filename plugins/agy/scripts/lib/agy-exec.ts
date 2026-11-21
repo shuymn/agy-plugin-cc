@@ -10,7 +10,7 @@ import { isRecord, type JsonObject } from "./json.ts";
 import { type GroupExit, spawnAgyGroup, type StopTiming } from "./process-group.ts";
 import { isValidThreadId } from "./thread-store.ts";
 
-export { AgyNotFoundError } from "./process-group.ts";
+export { AgyStartError } from "./process-group.ts";
 
 const STDERR_TAIL_LINES = 40;
 const MAX_STDERR_CHARS = 1_000_000;

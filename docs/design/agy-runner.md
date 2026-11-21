@@ -177,7 +177,7 @@ Same escaping and ordering rules as `codex-run`. `thread:` appears only when an 
 
 stderr on failure: `agy-run: <one-line reason>`, then up to 40 cleaned lines of `agy`'s stderr. The reason is the first that applies:
 
-1. `process group not confirmed gone: <error>`
+1. `process group not confirmed gone: <error>`; `agy could not start: <error>`
 2. `invalid conversation id from agy: <id>`; `thread record not written: <error>`
 3. `stale conversation: requested <id>, agy started <id>`
 4. `result.error`
