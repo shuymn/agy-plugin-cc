@@ -20,6 +20,7 @@ type Step =
   | "hang"
   | "escape"
   | "child"
+  | "closeStdin"
   | { init: { id?: unknown } }
   | { result: Record<string, unknown> }
   | { delta: string }
@@ -298,6 +299,9 @@ async function play(step: Step): Promise<void> {
     await readStdin();
   } else if (step === "actions") {
     applyActions();
+  } else if (step === "closeStdin") {
+    // Closes fd 0, so the runner's prompt write fails with EPIPE.
+    process.stdin.destroy();
   } else if (step === "ready") {
     readyFile(String(process.pid));
   } else if (step === "hang") {
