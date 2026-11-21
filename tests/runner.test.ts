@@ -282,8 +282,11 @@ test("a successful run prints the short report, and result.md and events.jsonl k
   assert.match(listing[0] ?? "", /^baseline [0-9a-f]{40}$/);
   assert.equal(listing[0], `baseline ${/baseline ([0-9a-f]{40})/.exec(out[6] ?? "")?.[1]}`);
   assert.match(listing[1] ?? "", /^final [0-9a-f]{40}$/);
-  assert.equal(listing[2], "A\ta\\nb.txt");
-  assert.equal(listing.length, 2 + 100 + 1);
+  assert.deepEqual(listing.slice(2), [
+    "A\ta\\nb.txt",
+    ...Array.from({ length: 99 }, (_, index) => `A\tfiles/f${String(index).padStart(3, "0")}.txt`),
+    "",
+  ]);
 
   const [logLine] = readRunLog(fake);
   assert.equal(logLine?.run, runId);
@@ -464,11 +467,21 @@ test("a non-empty response with denied actions is ok", () => {
 });
 
 test("no init within the wait stops agy before it receives any stdin", async () => {
-  const fake = makeFakeEnv({ steps: ["ready", "hang"] });
+  const fake = makeFakeEnv({ steps: ["hang"] });
   const repo = makeRepo(fake.env);
-  const result = await runInProcess(fake, ["--prompt-file", writePrompt(), "--cwd", repo], { initWaitMs: 300 });
+  const ready = path.join(makeTempDir(), "ready");
+  // The bound leaves the fake far more time than it needs to start and set
+  // up its signal handlers, which it confirms with the ready file; the logged
+  // SIGINT below shows the stop came after that.
+  const result = await runInProcess(fake, ["--prompt-file", writePrompt(), "--cwd", repo], {
+    env: { FAKE_AGY_READY_FILE: ready },
+    initWaitMs: 5_000,
+    during: async () => {
+      await waitForFile(ready, 10_000);
+    },
+  });
   assert.equal(result.exit, 1, result.stderr);
-  assert.equal(firstLine(result.stderr), "agy-run: no init event within 0.3s");
+  assert.equal(firstLine(result.stderr), "agy-run: no init event within 5s");
   assert.equal(outputLine(result.stdout, "thread"), undefined);
   const call = onlyCall(fake);
   assert.equal(call.stdinBytes, 0);
