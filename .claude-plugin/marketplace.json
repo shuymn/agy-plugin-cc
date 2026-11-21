@@ -1,0 +1,21 @@
+{
+  "name": "shuymn-agy",
+  "owner": {
+    "name": "shuymn"
+  },
+  "metadata": {
+    "description": "Claude Code plugin marketplace for the Antigravity CLI runner.",
+    "version": "0.0.0"
+  },
+  "plugins": [
+    {
+      "name": "agy",
+      "description": "Run Antigravity CLI turns from Claude Code with a role-free executable.",
+      "version": "0.0.0",
+      "author": {
+        "name": "shuymn"
+      },
+      "source": "./plugins/agy"
+    }
+  ]
+}
