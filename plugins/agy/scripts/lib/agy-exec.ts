@@ -1,7 +1,8 @@
 // Runs one `agy` print-mode turn over stream-json and collects what the runner
 // needs to judge it: the init and result events, the AGY_ERROR and jetski
 // lines on stderr, and whether the prompt was sent. The prompt is sent only
-// after the first init was accepted and while the run is not stopping.
+// after the first init was accepted and while the run is not stopping; an
+// init accepted while stopping is still reported, but gets no prompt.
 
 import fs from "node:fs";
 
@@ -296,9 +297,6 @@ export async function runAgy(args: readonly string[], options: AgyRunOptions): P
       group.stop();
       return;
     }
-    if (group.isStopping()) {
-      return;
-    }
     try {
       options.onInit?.(id);
     } catch (error) {
@@ -307,6 +305,10 @@ export async function runAgy(args: readonly string[], options: AgyRunOptions): P
       return;
     }
     conversationId = id;
+    // A stopping run has already closed stdin unwritten.
+    if (group.isStopping() || child.stdin.writableEnded) {
+      return;
+    }
     promptWritten = true;
     // A child that exits before reading all input closes the pipe; EPIPE is
     // not an error of its own.

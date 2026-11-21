@@ -595,7 +595,7 @@ for (const [signal, code] of [
 }
 
 // H12
-test("an init that arrives after the runner received SIGINT gets no prompt", async () => {
+test("an init that arrives after the runner received SIGINT is reported but gets no prompt", async () => {
   const { fake, repo } = setup([{ hang: { initOnSignal: true } }]);
   const ready = path.join(makeTempDir(), "ready");
   const runner = spawnRunner(["--prompt-file", writePrompt()], {
@@ -613,8 +613,11 @@ test("an init that arrives after the runner received SIGINT gets no prompt", asy
   const call = onlyCall(fake);
   assert.equal(call.initWritten, true);
   assert.equal(call.stdinBytes, 0);
-  assert.equal(outputLine(stdout, "thread"), undefined);
-  assert.equal(fs.existsSync(path.join(fake.stateDir, "threads")), false);
+  // The conversation is still reported and recorded, so it can be continued.
+  const thread = outputLine(stdout, "thread");
+  assert.match(thread ?? "", /^[0-9a-f-]{36}$/);
+  assert.ok(fs.existsSync(path.join(fake.stateDir, "threads", `${thread}.json`)));
+  assert.equal(outputLine(stdout, "status"), "interrupted (exit 130)");
 });
 
 // H9, H12
