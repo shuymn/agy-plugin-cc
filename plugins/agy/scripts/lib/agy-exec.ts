@@ -203,11 +203,9 @@ export function turnFailure(result: AgyRunResult, resumeId: string | null): stri
   if (result.resultBeforePrompt) {
     return "result before prompt";
   }
-  if (result.jetskiLine !== null) {
-    return result.jetskiLine;
-  }
+  // A jetski line explains an empty response; with a response it is only noise.
   if (turn !== null && !nonEmptyString(turn.response)) {
-    return "empty response";
+    return result.jetskiLine ?? "empty response";
   }
   if (turn === null) {
     return withLastLine(`no result event (agy exited ${exitText(result)})`, tail);

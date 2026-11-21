@@ -418,6 +418,18 @@ test("a turn that is not a usable answer exits 1 without result:, with the reaso
   }
 });
 
+test("a jetski line with a non-empty SUCCESS response is ok", () => {
+  const { fake, repo } = setup([
+    "init",
+    "read",
+    { stderr: 'jetski: no output produced — a tool required the "write" permission\n' },
+    { result: {} },
+  ]);
+  const result = run(fake, ["--prompt-file", writePrompt()], repo);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(outputLine(result.stdout, "status"), "ok (exit 0)");
+});
+
 test("an agy on PATH that cannot be started exits 1 with the normal report", () => {
   const fake = makeFakeEnv({ agy: false });
   const repo = makeRepo(fake.env);
