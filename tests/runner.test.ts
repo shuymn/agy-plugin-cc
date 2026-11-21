@@ -430,6 +430,15 @@ test("a jetski line with a non-empty SUCCESS response is ok", () => {
   assert.equal(outputLine(result.stdout, "status"), "ok (exit 0)");
 });
 
+test("a prompt that agy never received fails the run, even with a SUCCESS result", () => {
+  const { fake, repo } = setup(["closeStdin", "init", { sleep: 200 }, { result: {} }]);
+  const result = run(fake, ["--prompt-file", writePrompt("x".repeat(2 * 1024 * 1024))], repo);
+  assert.equal(result.status, 1, result.stderr);
+  assert.match(firstLine(result.stderr), /^agy-run: prompt not sent: .*EPIPE/);
+  assert.equal(outputLine(result.stdout, "result"), undefined);
+  assert.equal(onlyCall(fake).stdinBytes, 0);
+});
+
 test("an agy on PATH that cannot be started exits 1 with the normal report", () => {
   const fake = makeFakeEnv({ agy: false });
   const repo = makeRepo(fake.env);
@@ -682,7 +691,8 @@ test("an agy that exits before reading a large prompt does not crash the runner"
   const { fake, repo } = setup(["init", { exit: 1 }]);
   const result = run(fake, ["--prompt-file", writePrompt(`go ${"x".repeat(4 * 1024 * 1024)}`)], repo);
   assert.equal(result.status, 1);
-  assert.equal(firstLine(result.stderr), "agy-run: no result event (agy exited 1)");
+  // The write fails once agy has gone, so the prompt counts as not sent.
+  assert.match(firstLine(result.stderr), /^agy-run: prompt not sent: /);
 });
 
 test("the runner exits as soon as a quick agy has finished", async () => {

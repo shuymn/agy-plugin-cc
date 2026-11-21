@@ -65,7 +65,10 @@ export type AgyRunResult = GroupExit & {
   recordError: Error | null;
   initTimedOut: boolean;
   initWaitMs: number;
+  // True once the whole prompt line was handed to agy's stdin.
   promptWritten: boolean;
+  // Why writing the prompt failed, such as EPIPE when agy closed its stdin.
+  promptError: Error | null;
   resultBeforePrompt: boolean;
   result: AgyResult | null;
   agyErrorLine: string | null;
@@ -201,6 +204,9 @@ export function turnFailure(result: AgyRunResult, resumeId: string | null): stri
   if (turn !== null && turn.conversationId !== result.conversationId) {
     return `result conversation ${escapeLine(display(turn.conversationId))} differs from init ${result.conversationId ?? ""}`;
   }
+  if (result.promptError !== null) {
+    return `prompt not sent: ${result.promptError.message}`;
+  }
   if (result.resultBeforePrompt) {
     return "result before prompt";
   }
@@ -253,10 +259,11 @@ function lineSplitter(onLine: (line: Buffer) => void): { push: (chunk: Buffer) =
 export async function runAgy(args: readonly string[], options: AgyRunOptions): Promise<AgyRunResult> {
   const initWaitMs = options.initWaitMs ?? INIT_WAIT_MS;
   let promptWritten = false;
+  let promptError: Error | null = null;
 
   // A run that is stopping never sends the prompt: stdin is closed unwritten.
   const closeStdinUnwritten = (): void => {
-    if (!promptWritten && !group.child.stdin.writableEnded) {
+    if (!group.child.stdin.writableEnded) {
       group.child.stdin.end();
     }
   };
@@ -309,10 +316,19 @@ export async function runAgy(args: readonly string[], options: AgyRunOptions): P
     if (group.isStopping() || child.stdin.writableEnded) {
       return;
     }
-    promptWritten = true;
-    // A child that exits before reading all input closes the pipe; EPIPE is
-    // not an error of its own.
-    child.stdin.end(promptLine(options.prompt));
+    // The prompt counts as sent only once the write completed; a failure
+    // (EPIPE when agy closed its stdin) fails the run.
+    child.stdin.once("error", (error) => {
+      promptError ??= error;
+    });
+    child.stdin.write(promptLine(options.prompt), (error) => {
+      if (error) {
+        promptError ??= error;
+      } else if (promptError === null) {
+        promptWritten = true;
+      }
+    });
+    child.stdin.end();
   };
 
   const onEvent = (event: JsonObject): void => {
@@ -407,6 +423,7 @@ export async function runAgy(args: readonly string[], options: AgyRunOptions): P
       initTimedOut,
       initWaitMs,
       promptWritten,
+      promptError,
       resultBeforePrompt,
       result,
       agyErrorLine,

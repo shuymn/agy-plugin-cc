@@ -109,7 +109,7 @@ On failure, stderr prints `agy-run: <one-line reason>` followed by up to 40 clea
 
 `agy-run` writes the `response` of `agy`'s `result` event byte for byte (UTF-8, no added newline) to `<state>/runs/<run id>/result.md`. Each run gets its own private directory (`0700`), so concurrent runs do not overwrite each other's output.
 
-A run is `ok` only when all of these hold: `agy` exited `0`; exactly one `init` and exactly one `result` event arrived, with the same conversation id, and the `result` came after the prompt was sent; on a resume that id equals `--thread`; the result's `status` is `SUCCESS`; it has no `finished_reason`; its `response` is non-empty; no `AGY_ERROR:` line appeared on stderr; and `result.md` was written. Otherwise the run exits `1` with a one-line reason, even when `agy` exited `0`. A turn whose response explains a denied tool call stays `ok`.
+A run is `ok` only when all of these hold: `agy` exited `0`; exactly one `init` and exactly one `result` event arrived, with the same conversation id, and the `result` came after `agy` received the whole prompt; on a resume that id equals `--thread`; the result's `status` is `SUCCESS`; it has no `finished_reason`; its `response` is non-empty; no `AGY_ERROR:` line appeared on stderr; and `result.md` was written. Otherwise the run exits `1` with a one-line reason, even when `agy` exited `0`. A turn whose response explains a denied tool call stays `ok`.
 
 `agy`'s stdout is also saved byte for byte to `<state>/runs/<run id>/events.jsonl`. It is the only record of which tools ran, so look there when `changes:` shows something unexpected. It may contain tool parameters and outputs. If it cannot be written, the run continues and prints `agy-run: events not saved: <error>` on stderr.
 

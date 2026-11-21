@@ -184,7 +184,7 @@ stderr on failure: `agy-run: <one-line reason>`, then up to 40 cleaned lines of 
 5. the `AGY_ERROR:` line's `short_error`, else its `reason`, else the raw line
 6. `finished_reason: <value>`
 7. `status: <value>` (a `result` whose status is not `SUCCESS`, without an error)
-8. `no init event within 120s`; when neither `init` nor `result` arrived, `agy exited <n>` followed by `: <last stderr line>` when stderr is not empty; `no init event`; `multiple init events`; `multiple result events`; `result conversation <id> differs from init <id>`; `result before prompt`
+8. `no init event within 120s`; when neither `init` nor `result` arrived, `agy exited <n>` followed by `: <last stderr line>` when stderr is not empty; `no init event`; `multiple init events`; `multiple result events`; `result conversation <id> differs from init <id>`; `prompt not sent: <error>`; `result before prompt`
 9. the `jetski:` line
 10. `empty response`
 11. `no result event (agy exited <n>)`, followed by `: <last stderr line>` when stderr is not empty
