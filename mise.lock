@@ -71,19 +71,21 @@ url = "https://github.com/babarot/gh-infra/releases/download/v0.20.0/gh-infra_da
 url_api = "https://api.github.com/repos/babarot/gh-infra/releases/assets/730122136"
 
 [[tools."github:google-antigravity/antigravity-cli"]]
-version = "1.5.11"
+version = "1.5.12"
 backend = "github:google-antigravity/antigravity-cli"
 specifiers = ["1"]
 
 [tools."github:google-antigravity/antigravity-cli"."platforms.linux-x64"]
-checksum = "sha256:df652c98fdf519a87c017b4e1d92f3fdb66c344de16e5e685c596637bbd28334"
-url = "https://github.com/google-antigravity/antigravity-cli/releases/download/1.5.11/agy_cli_linux_x64.tar.gz"
-url_api = "https://api.github.com/repos/google-antigravity/antigravity-cli/releases/assets/762273489"
+checksum = "sha256:0f0cb851cdc9fbedd50432570aa6ae9c4c398b9ea3f1e23e7776f707643c5b3e"
+checksum_source = "mise-versions"
+url = "https://github.com/google-antigravity/antigravity-cli/releases/download/1.5.12/agy_cli_linux_x64.tar.gz"
+url_api = "https://api.github.com/repos/google-antigravity/antigravity-cli/releases/assets/765573237"
 
 [tools."github:google-antigravity/antigravity-cli"."platforms.macos-arm64"]
-checksum = "sha256:74d7eed163e25a77f159b1e595a0e17dd8834ed540f8df6125d1889a7c886774"
-url = "https://github.com/google-antigravity/antigravity-cli/releases/download/1.5.11/agy_cli_mac_arm64.tar.gz"
-url_api = "https://api.github.com/repos/google-antigravity/antigravity-cli/releases/assets/762273841"
+checksum = "sha256:fa2bb0e6646db70e6610ed41382f9ff23e260b8f649427c4ef1361aaa8a8dbcb"
+checksum_source = "mise-versions"
+url = "https://github.com/google-antigravity/antigravity-cli/releases/download/1.5.12/agy_cli_mac_arm64.tar.gz"
+url_api = "https://api.github.com/repos/google-antigravity/antigravity-cli/releases/assets/765573527"
 
 [[tools.node]]
 version = "24.22.3"
