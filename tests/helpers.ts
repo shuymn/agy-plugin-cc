@@ -83,9 +83,13 @@ export function makeFakeEnv(options: { agy?: boolean; steps?: readonly unknown[]
   fs.mkdirSync(tmp);
   fs.symlinkSync(process.execPath, path.join(tools, "node"));
   fs.symlinkSync(findOnPath("git"), path.join(tools, "git"));
-  fs.writeFileSync(path.join(fakeBin, "agy"), `#!/bin/sh\nexec "${process.execPath}" "${FAKE_AGY}" "$@"\n`, {
-    mode: 0o755,
-  });
+  // FAKE_AGY_CLOSE_STDIN=1 closes the read end of agy's stdin pipe before it
+  // starts, so the runner's prompt write fails with EPIPE.
+  fs.writeFileSync(
+    path.join(fakeBin, "agy"),
+    `#!/bin/sh\nif [ "$FAKE_AGY_CLOSE_STDIN" = 1 ]; then exec 0<&-; fi\nexec "${process.execPath}" "${FAKE_AGY}" "$@"\n`,
+    { mode: 0o755 },
+  );
 
   const env: NodeJS.ProcessEnv = {};
   for (const [key, value] of Object.entries(process.env)) {

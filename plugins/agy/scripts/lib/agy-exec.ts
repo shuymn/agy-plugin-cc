@@ -316,14 +316,19 @@ export async function runAgy(args: readonly string[], options: AgyRunOptions): P
     if (group.isStopping() || child.stdin.writableEnded) {
       return;
     }
-    // The prompt counts as sent only once the write completed; a failure
-    // (EPIPE when agy closed its stdin) fails the run.
-    child.stdin.once("error", (error) => {
-      promptError ??= error;
-    });
+    // The prompt counts as sent only once the write completed. A failure
+    // (EPIPE when agy closed its stdin) fails the run and stops agy, which
+    // may otherwise keep running without a prompt.
+    const failPrompt = (error: Error): void => {
+      if (promptError === null) {
+        promptError = error;
+        group.stop();
+      }
+    };
+    child.stdin.once("error", failPrompt);
     child.stdin.write(promptLine(options.prompt), (error) => {
       if (error) {
-        promptError ??= error;
+        failPrompt(error);
       } else if (promptError === null) {
         promptWritten = true;
       }

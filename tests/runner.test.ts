@@ -434,12 +434,27 @@ test("a jetski line with a non-empty SUCCESS response is ok", () => {
 });
 
 test("a prompt that agy never received fails the run, even with a SUCCESS result", () => {
-  const { fake, repo } = setup(["closeStdin", "init", { sleep: 200 }, { result: {} }]);
-  const result = run(fake, ["--prompt-file", writePrompt("x".repeat(2 * 1024 * 1024))], repo);
+  const { fake, repo } = setup(["init", { sleep: 200 }, { result: {} }]);
+  const result = run(fake, ["--prompt-file", writePrompt("x".repeat(2 * 1024 * 1024))], repo, {
+    FAKE_AGY_CLOSE_STDIN: "1",
+  });
   assert.equal(result.status, 1, result.stderr);
   assert.match(firstLine(result.stderr), /^agy-run: prompt not sent: .*EPIPE/);
   assert.equal(outputLine(result.stdout, "result"), undefined);
   assert.equal(onlyCall(fake).stdinBytes, 0);
+});
+
+test("a prompt write error stops an agy that keeps running and exits 1", () => {
+  const { fake, repo } = setup(["init", "hang"]);
+  const result = run(fake, ["--prompt-file", writePrompt("x".repeat(2 * 1024 * 1024))], repo, {
+    FAKE_AGY_CLOSE_STDIN: "1",
+  });
+  assert.equal(result.status, 1, result.stderr);
+  assert.match(firstLine(result.stderr), /^agy-run: prompt not sent: .*EPIPE/);
+  assert.equal(outputLine(result.stdout, "status"), "failed (exit 1)");
+  const call = onlyCall(fake);
+  assert.deepEqual(call.signals, ["SIGINT"]);
+  assert.equal(call.stdinBytes, 0);
 });
 
 test("an agy on PATH that cannot be started exits 1 with the normal report", () => {

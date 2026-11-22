@@ -121,8 +121,10 @@ export function spawnAgyGroup(args: readonly string[], options: GroupOptions): A
     }
   };
 
+  // Set once the result settled; a later stop() would only start timers.
+  let settledGroup = false;
   const stop = (): void => {
-    if (stopping) {
+    if (stopping || settledGroup) {
       return;
     }
     stopping = true;
@@ -168,6 +170,7 @@ export function spawnAgyGroup(args: readonly string[], options: GroupOptions): A
         return;
       }
       settled = true;
+      settledGroup = true;
       cleanup();
       if (!streamsClosed) {
         child.stdout.destroy();
