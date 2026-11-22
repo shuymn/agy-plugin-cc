@@ -1,6 +1,6 @@
 {
   "name": "agy",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Run Antigravity CLI turns from Claude Code with a role-free executable.",
   "author": {
     "name": "shuymn"
