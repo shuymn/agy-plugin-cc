@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.1.0
 
 Added `agy-run`, a role-free executable in `plugins/agy/bin/` (added to the Bash tool's `PATH` by Claude Code) that runs one Antigravity CLI (`agy`) turn. The caller writes the role and instructions in the prompt file.
 

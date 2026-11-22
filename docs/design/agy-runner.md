@@ -1,6 +1,6 @@
 # agy runner: a role-free entry point for running Antigravity CLI from Claude Code
 
-Status: proposed. Target: agy-plugin-cc 0.1.0, a new repository modeled on `shuymn/codex-plugin-cc` 3.0.0 (`docs/design/codex-runner.md`, referred to below as "the Codex design").
+Status: implemented in agy-plugin-cc 0.1.0, a repository modeled on `shuymn/codex-plugin-cc` 3.0.0 (`docs/design/codex-runner.md`, referred to below as "the Codex design").
 
 ## Goal
 
@@ -54,7 +54,7 @@ Observed with `agy` 1.5.14 (as `agy --version` reports it after the CLI's own up
 | F14 | Without a login, spawned detached with three pipes (the runner's spawn mode), `agy` exits 1 within a second with a `result` of `status: ERROR`. With a controlling terminal it instead prints an OAuth URL, waits 60 seconds, and then emits the error result.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             | Runs with a fresh home.                                                                                              |
 | F15 | `--model` takes ids from `agy models` (for example `gemini-4-neon-medium`); `--effort` takes `low\|medium\|high\|xhigh\|max`. A full argv with `--settings '{bad'` passes flag parsing and fails on the settings value with exit 1 before authentication; an unknown flag or a misplaced `-p` exits 2.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     | `agy --help`, `agy models`, runs.                                                                                    |
 
-Not observed: how `agy` and its child commands react to SIGINT/SIGTERM in print mode, and whether its tool commands stay in its process group; whether a resumed conversation's file tools follow the original directory like its shell tool (F9).
+Observed with `agy-run` 0.1.0 on `agy` 1.5.14: SIGINT to the runner during a running shell command (`sleep 120`) stopped `agy` and the command, the run exited 130 with `changes: unknown: interrupted`, and a later `--thread` round recalled the earlier request. Whether tool commands always stay in `agy`'s process group is not established beyond that run. Not observed: whether a resumed conversation's file tools follow the original directory like its shell tool (F9).
 
 ## Decisions
 
@@ -258,6 +258,5 @@ Rewritten: `codex-run.ts` → `agy-run.ts` (no read-only branch, stdin envelope,
 
 ## Open questions
 
-- Whether SIGINT/SIGTERM to `agy` in print mode stops its tool commands, whether those commands stay in its process group, and whether the conversation stays resumable after a staged stop (P10).
 - Whether a resumed conversation's file tools follow the original directory like its shell tool (F9). D7 is safe either way.
 - The exit code of a print-timeout run (F8). D6 avoids the flag, and D5 does not depend on the exit code for it.
