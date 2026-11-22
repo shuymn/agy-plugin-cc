@@ -11,8 +11,6 @@ import { isRecord, type JsonObject } from "./json.ts";
 import { type GroupExit, spawnAgyGroup, type StopTiming } from "./process-group.ts";
 import { isValidThreadId } from "./thread-store.ts";
 
-export { AgyStartError } from "./process-group.ts";
-
 const STDERR_TAIL_LINES = 40;
 const MAX_STDERR_CHARS = 1_000_000;
 // Longer stderr lines are scanned by their head only.
@@ -65,8 +63,6 @@ export type AgyRunResult = GroupExit & {
   recordError: Error | null;
   initTimedOut: boolean;
   initWaitMs: number;
-  // True once the whole prompt line was handed to agy's stdin.
-  promptWritten: boolean;
   // Why writing the prompt failed, such as EPIPE when agy closed its stdin.
   promptError: Error | null;
   resultBeforePrompt: boolean;
@@ -115,16 +111,12 @@ export function cleanAgyStderr(stderr: string): string {
     .join("\n");
 }
 
-function lastLine(cleanedTail: string): string {
-  return cleanedTail.split("\n").findLast(Boolean) ?? "";
-}
-
 function exitText(result: AgyRunResult): string {
   return result.exitCode === null ? `signal ${result.exitSignal ?? "unknown"}` : String(result.exitCode);
 }
 
 function withLastLine(text: string, cleanedTail: string): string {
-  const last = lastLine(cleanedTail);
+  const last = cleanedTail.split("\n").findLast(Boolean) ?? "";
   return last ? `${text}: ${last}` : text;
 }
 
@@ -157,8 +149,7 @@ function agyErrorReason(line: string): string {
 // Why the turn is not a completed answer of the requested conversation, or
 // null when it is. The process group's own failures and signals are judged
 // by the caller first; this covers everything else, in this order.
-export function turnFailure(result: AgyRunResult, resumeId: string | null): string | null {
-  const tail = cleanAgyStderr(result.stderr);
+export function turnFailure(result: AgyRunResult, resumeId: string | null, tail: string): string | null {
   const turn = result.result;
   if (result.invalidInitId !== null) {
     return `invalid conversation id from agy: ${result.invalidInitId}`;
@@ -223,10 +214,6 @@ export function turnFailure(result: AgyRunResult, resumeId: string | null): stri
   return null;
 }
 
-function asObject(value: unknown): JsonObject | null {
-  return isRecord(value) ? value : null;
-}
-
 function toError(error: unknown): Error {
   return error instanceof Error ? error : new Error(String(error));
 }
@@ -267,7 +254,7 @@ export async function runAgy(args: readonly string[], options: AgyRunOptions): P
       group.child.stdin.end();
     }
   };
-  const group = spawnAgyGroup(args, { ...options, beforeStop: () => closeStdinUnwritten() });
+  const group = spawnAgyGroup(args, { ...options, beforeStop: closeStdinUnwritten });
   const { child } = group;
 
   let stderr = "";
@@ -282,7 +269,8 @@ export async function runAgy(args: readonly string[], options: AgyRunOptions): P
   let result: AgyResult | null = null;
   let agyErrorLine: string | null = null;
   let jetskiLine: string | null = null;
-  let archiving = options.eventsFile !== null;
+  // null once archiving stopped after the first write failure.
+  let eventsFile = options.eventsFile;
 
   const initTimer = setTimeout(() => {
     if (initCount === 0 && child.exitCode === null && child.signalCode === null) {
@@ -348,7 +336,7 @@ export async function runAgy(args: readonly string[], options: AgyRunOptions): P
         resultBeforePrompt = true;
       }
       if (resultCount === 1) {
-        const payload = asObject(event.result);
+        const payload = isRecord(event.result) ? event.result : null;
         result = {
           conversationId: payload?.conversation_id,
           status: payload?.status,
@@ -367,17 +355,16 @@ export async function runAgy(args: readonly string[], options: AgyRunOptions): P
     } catch {
       return;
     }
-    const event = asObject(parsed);
-    if (event !== null) {
-      onEvent(event);
+    if (isRecord(parsed)) {
+      onEvent(parsed);
     }
   });
   child.stdout.on("data", (chunk: Buffer) => {
-    if (archiving && options.eventsFile !== null) {
+    if (eventsFile !== null) {
       try {
-        fs.appendFileSync(options.eventsFile, chunk);
+        fs.appendFileSync(eventsFile, chunk);
       } catch (error) {
-        archiving = false;
+        eventsFile = null;
         options.onArchiveError?.(toError(error));
       }
     }
@@ -412,7 +399,7 @@ export async function runAgy(args: readonly string[], options: AgyRunOptions): P
   });
 
   // agy that exits before any init gets stdin closed unwritten.
-  child.on("exit", () => closeStdinUnwritten());
+  child.on("exit", closeStdinUnwritten);
 
   try {
     const exit = await group.exited;
@@ -427,7 +414,6 @@ export async function runAgy(args: readonly string[], options: AgyRunOptions): P
       recordError,
       initTimedOut,
       initWaitMs,
-      promptWritten,
       promptError,
       resultBeforePrompt,
       result,

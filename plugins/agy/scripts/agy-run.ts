@@ -180,7 +180,7 @@ function outcomeOf(result: AgyRunResult, resumeId: string | null): Outcome {
     const summary = result.recordError === null ? null : `thread record not written: ${result.recordError.message}`;
     return { exit: signalExitCode(result.receivedSignal), summary, detail: "" };
   }
-  const failure = turnFailure(result, resumeId);
+  const failure = turnFailure(result, resumeId, tail);
   if (failure !== null) {
     return { exit: EXIT_FAILED, summary: failure, detail: tail };
   }

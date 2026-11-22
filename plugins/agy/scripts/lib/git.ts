@@ -92,10 +92,6 @@ function revParse(cwd: string, flags: readonly string[]): string | null {
   return value;
 }
 
-function gitToplevel(cwd: string): string | null {
-  return revParse(cwd, ["--show-toplevel"]);
-}
-
 // The real path of the repository's common Git directory, which all worktrees
 // of one repository share.
 export function gitCommonDir(cwd: string): string | null {
@@ -116,5 +112,5 @@ export function canonicalWorkspaceRoot(workspaceRoot: string): string {
 // The repository root, or cwd itself only when it is confirmed to be outside
 // Git. Throws GitError when that cannot be told.
 export function resolveWorkspaceRoot(cwd: string): string {
-  return gitToplevel(cwd) ?? cwd;
+  return revParse(cwd, ["--show-toplevel"]) ?? cwd;
 }
