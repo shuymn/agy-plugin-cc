@@ -41,7 +41,6 @@ function findOnPath(command: string): string {
 // need for basename and other coreutils.
 export type FakeEnv = {
   env: NodeJS.ProcessEnv;
-  home: string;
   // <XDG_STATE_HOME>/agy-plugin-cc, the runner's state directory.
   stateDir: string;
   // The runner's TMPDIR.
@@ -53,7 +52,6 @@ export type FakeEnv = {
 export type FakeCall = {
   argv: string[];
   cwd: string;
-  pid: number;
   // The bytes agy received on stdin, base64.
   stdin: string;
   stdinBytes: number;
@@ -66,7 +64,6 @@ export type FakeCall = {
   env: Record<string, string>;
   // The file the fake wrote into $TMPDIR, with FAKE_AGY_PROBE=1.
   probe?: string;
-  childPid?: number;
 };
 
 export function makeFakeEnv(options: { agy?: boolean; steps?: readonly unknown[] } = {}): FakeEnv {
@@ -117,7 +114,6 @@ export function makeFakeEnv(options: { agy?: boolean; steps?: readonly unknown[]
 
   return {
     env,
-    home,
     stateDir: path.join(stateHome, "agy-plugin-cc"),
     tmp,
     readLog: () =>

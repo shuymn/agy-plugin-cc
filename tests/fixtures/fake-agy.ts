@@ -38,7 +38,6 @@ let bytesBeforeInit = 0;
 const signals: string[] = [];
 let rejected: string | undefined;
 let probe: string | undefined;
-let childPid: number | undefined;
 
 process.stdin.on("data", (chunk: Buffer) => {
   stdinChunks.push(chunk);
@@ -72,7 +71,6 @@ process.on("exit", () => {
     `${JSON.stringify({
       argv,
       cwd: process.cwd(),
-      pid: process.pid,
       env: agyEnv(),
       stdin: stdin.toString("base64"),
       stdinBytes: stdin.length,
@@ -81,7 +79,6 @@ process.on("exit", () => {
       signals,
       ...(rejected === undefined ? {} : { rejected }),
       ...(probe === undefined ? {} : { probe }),
-      ...(childPid === undefined ? {} : { childPid }),
     })}\n`,
   );
 });
@@ -95,7 +92,7 @@ function reject(reason: string): never {
 // Go's flag package: -name, --name, -name=value; value flags take the next
 // argument when no "=" is given; parsing stops at the first non-flag.
 const VALUE_FLAGS = new Set(["input-format", "output-format", "conversation", "model", "effort", "settings", "p"]);
-const BOOL_FLAGS = new Set(["disable-slash-commands", "dangerously-skip-permissions", "sandbox"]);
+const BOOL_FLAGS = new Set(["disable-slash-commands", "dangerously-skip-permissions"]);
 
 function parseFlags(args: readonly string[]): Map<string, string> {
   const flags = new Map<string, string>();
@@ -305,7 +302,6 @@ async function play(step: Step): Promise<void> {
   } else if (step === "child") {
     // A child in agy's own process group that outlives nothing on its own.
     const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });
-    childPid = child.pid;
     if (process.env.FAKE_AGY_CHILD_FILE) {
       fs.writeFileSync(process.env.FAKE_AGY_CHILD_FILE, String(child.pid ?? 0));
     }
