@@ -199,7 +199,7 @@ stderr on failure: `agy-run: <one-line reason>`, then up to 40 cleaned lines of 
 | 1     | D5 does not hold, a Git lookup failed before starting, the thread record could not be written, or the process group could not be confirmed gone (this takes precedence over a signal). |
 | 2     | Usage error or refused `--thread`. `agy` was not started.                                                                                                                              |
 | 3     | `agy` not found on `PATH`.                                                                                                                                                             |
-| 128+n | Stopped by signal n after `agy` started.                                                                                                                                               |
+| 128+n | Stopped by signal n after `agy` started; a thread record write failure during the stop is reported on stderr and keeps this code.                                                      |
 
 The change report never changes the exit code.
 
