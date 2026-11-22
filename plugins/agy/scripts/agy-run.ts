@@ -176,7 +176,9 @@ function outcomeOf(result: AgyRunResult, resumeId: string | null): Outcome {
     return { exit: EXIT_FAILED, summary: `process group not confirmed gone: ${result.reapError}`, detail: tail };
   }
   if (result.receivedSignal !== null) {
-    return { exit: signalExitCode(result.receivedSignal), summary: null, detail: "" };
+    // A conversation printed as thread: but not recorded cannot be continued.
+    const summary = result.recordError === null ? null : `thread record not written: ${result.recordError.message}`;
+    return { exit: signalExitCode(result.receivedSignal), summary, detail: "" };
   }
   const failure = turnFailure(result, resumeId);
   if (failure !== null) {

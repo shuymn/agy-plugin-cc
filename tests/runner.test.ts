@@ -657,6 +657,34 @@ test("an init that arrives after the runner received SIGINT is reported but gets
   assert.equal(outputLine(stdout, "status"), "interrupted (exit 130)");
 });
 
+test("a record write failure for an init accepted while stopping is reported on stderr", async () => {
+  const { fake, repo } = setup([{ hang: { initOnSignal: true } }]);
+  // A regular file where the threads directory should be.
+  fs.mkdirSync(fake.stateDir, { recursive: true });
+  fs.writeFileSync(path.join(fake.stateDir, "threads"), "not a directory");
+  const ready = path.join(makeTempDir(), "ready");
+  const runner = spawnRunner(["--prompt-file", writePrompt()], {
+    env: { ...fake.env, FAKE_AGY_READY_FILE: ready },
+    cwd: repo,
+  });
+  let stdout = "";
+  let stderr = "";
+  runner.stdout.setEncoding("utf8").on("data", (chunk: string) => {
+    stdout += chunk;
+  });
+  runner.stderr.setEncoding("utf8").on("data", (chunk: string) => {
+    stderr += chunk;
+  });
+  const exited = exitCodeOf(runner);
+  await waitForFile(ready);
+  runner.kill("SIGINT");
+  assert.equal(await exited, 130);
+  assert.match(outputLine(stdout, "thread") ?? "", /^[0-9a-f-]{36}$/);
+  assert.equal(outputLine(stdout, "status"), "interrupted (exit 130)");
+  assert.match(firstLine(stderr), /^agy-run: thread record not written: /);
+  assert.equal(onlyCall(fake).stdinBytes, 0);
+});
+
 // H9, H12
 test("a process group that cannot be confirmed gone exits 1 even after a signal, and leaves the scratch directory", async () => {
   const fake = makeFakeEnv({ steps: ["init", "hang"] });
